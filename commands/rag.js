@@ -8,11 +8,12 @@ const { encryptIfPossible, decryptIfPossible } = require("../utils/secrets");
 const { createSetupLink } = require("../utils/setupLink");
 
 module.exports = {
-  name: "rag",
+  name: "skii",
   description:
-    "Chat with AI models through OpenRouter with vector-based memory",
+    "Chat with AI models with vector-based memory",
   async execute(message, args) {
     const subcommand = args[0];
+    console.log("subcommand:", subcommand);
     const userId = message.author.id;
 
     try {
@@ -42,7 +43,7 @@ module.exports = {
           await handlePlan(message, args.slice(1), userId);
           break;
         default:
-          if (!subcommand) {
+          if (subcommand) {
             await handleChat(message, args, userId);
           } else {
             await message.reply(
@@ -64,18 +65,14 @@ module.exports = {
   },
 };
 
-// Minimal, safe user input sanitization for chat/search text
 function sanitizeUserInput(text) {
   if (typeof text !== "string") return "";
   let t = text;
-  // Normalize whitespace
   t = t.replace(/[\t\r\f]+/g, " ");
-
   t = t
     .replace(/<\/(?:script|style)\s*>/gi, "")
     .replace(/<\s*(?:script|style)[^>]*>[\s\S]*?$/gi, "")
     .replace(/<[^>]+>/g, "");
-
   try {
     t = validator.unescape(t);
   } catch {}
