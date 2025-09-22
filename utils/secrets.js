@@ -5,7 +5,6 @@ const PREFIX = 'enc:v1:';
 function getKey() {
   const sec = process.env.SECRETS_KEY;
   if (!sec) return null;
-  // Support base64 32 bytes or passphrase-derived
   if (/^[A-Za-z0-9+/=]{43,44}$/.test(sec)) {
     try { return Buffer.from(sec, 'base64'); } catch {}
   }

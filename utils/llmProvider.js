@@ -5,13 +5,11 @@ const { createGoogleGenerativeAI } = require("@ai-sdk/google");
 const { createGroq } = require("@ai-sdk/groq");
 const Bottleneck = require('bottleneck');
 
-// Global LLM concurrency limiter
 const llmLimiter = new Bottleneck({
   maxConcurrent: parseInt(process.env.LLM_MAX_CONCURRENCY || '5', 10),
   minTime: parseInt(process.env.LLM_MIN_TIME_MS || '0', 10),
 });
 
-// Map provider -> client factory
 function getClient(provider, options) {
   switch ((provider || "").toLowerCase()) {
     case "openrouter":
@@ -41,8 +39,7 @@ function getClient(provider, options) {
   }
 }
 
-// messages: [{ role: 'system'|'user'|'assistant', content: string }]
-// Returns: { text, raw }
+
 async function chatWithProvider({
   provider,
   apiKey,
@@ -64,16 +61,13 @@ async function chatWithProvider({
       title,
     });
 
-    // Vercel AI SDK format
     const result = await streamText({
       model: client(model),
       messages,
       temperature,
       maxTokens,
-      // We disable streaming for Discord reply assembly; still use streamText as it normalizes outputs
     });
 
-    // Accumulate streamed text safely
     let fullText = "";
     for await (const chunk of result.textStream) {
       if (typeof chunk === "string") fullText += chunk;

@@ -52,7 +52,6 @@ module.exports = {
             try {
                 await message.reply('An error occurred while processing your request.');
             } catch {
-                // If original message was deleted (e.g., to protect API key), fall back
                 await message.channel.send('An error occurred while processing your request.');
             }
         }
@@ -79,7 +78,6 @@ async function handleSetup(message, args, userId) {
         }
     }
 
-    // In DM: accept either direct key, or provide link if missing args
     if (!provider || !apiKey) {
         const selProvider = provider || (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
         try {
@@ -255,7 +253,7 @@ async function handleChat(message, args, userId) {
         }
         if (recentHistory.length) {
             contextParts.push('Recent chat history (last few turns):');
-            const lastTurns = recentHistory.slice(-10); // already sanitized
+            const lastTurns = recentHistory.slice(-10); 
             for (const h of lastTurns) {
                 const tag = h.role === 'user' ? 'User' : 'Assistant';
                 contextParts.push(`- ${tag}: ${h.content}`);
