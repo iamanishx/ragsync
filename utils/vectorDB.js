@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
+const Bottleneck = require('bottleneck');
 
 class VectorDB {
     constructor() {
@@ -14,6 +15,10 @@ class VectorDB {
         );
         this.embeddingDim = parseInt(process.env.EMBEDDINGS_DIM || '768', 10);
         this.fallbackEmbeddingModel = 'embedding-001';
+        // Concurrency limiter for embedding requests
+        const maxConcurrent = parseInt(process.env.EMBED_MAX_CONCURRENCY || '5', 10);
+        const minTime = parseInt(process.env.EMBED_MIN_TIME_MS || '0', 10);
+        this.embedLimiter = new Bottleneck({ maxConcurrent, minTime });
     }
 
     async initialize() {
@@ -36,7 +41,30 @@ class VectorDB {
                         vectors: {
                             size: this.embeddingDim,
                             distance: 'Cosine'
+                        },
+                        optimizers_config: {
+                            default_segment_number: 2,
+                            indexing_threshold: 10000
+                        },
+                        quantization_config: {
+                            scalar: {
+                                type: 'int8',
+                                quantile: 0.99,
+                            }
                         }
+                    });
+                    // Create payload indexes for common filters
+                    await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}/index`, {
+                        field_name: 'guildId',
+                        field_schema: 'keyword',
+                    });
+                    await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}/index`, {
+                        field_name: 'userId',
+                        field_schema: 'keyword',
+                    });
+                    await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}/index`, {
+                        field_name: 'channelId',
+                        field_schema: 'keyword',
                     });
                     console.log(`Collection created successfully with ${this.embeddingDim}-dimensional vectors for embeddings`);
                 } catch (createError) {
@@ -51,7 +79,7 @@ class VectorDB {
     async createEmbedding(text, _apiKeyIgnored, _userIdIgnored = null, isQuery = false) {
         const provider = this.embeddingProvider;
         const model = this.embeddingModel;
-
+        const run = async () => {
         try {
             if (provider === 'google') {
                 const geminiKey = process.env.GEMINI_API_KEY;
@@ -113,6 +141,9 @@ class VectorDB {
 
         console.log('Using local embedding generation as last resort...');
         return this.createLocalEmbedding(text);
+        };
+        // Run under limiter
+        return this.embedLimiter.schedule(run);
     }
 
     createLocalEmbedding(text) {
@@ -149,7 +180,7 @@ class VectorDB {
         
         sentences.forEach((sentence, idx) => {
             const sentenceLength = sentence.length;
-            const index = (sentenceLength + idx * 31) % 768;
+            const index = (sentenceLength + idx * 31) % this.embeddingDim;
             embedding[index] += sentences.length > 1 ? 1 / sentences.length : 1;
         });
         
@@ -165,14 +196,24 @@ class VectorDB {
         return embedding.map(val => magnitude > 0 ? val / magnitude : 0);
     }
 
+    // Ensure vector length matches collection size and is L2-normalized for cosine
+    normalizeEmbedding(vec) {
+        if (!Array.isArray(vec)) return null;
+        const out = vec.slice(0, this.embeddingDim);
+        while (out.length < this.embeddingDim) out.push(0);
+        const mag = Math.hypot(...out);
+        return mag ? out.map(v => v / mag) : out;
+    }
+
     async storeConversation(userId, guildId, channelId, userMessage, aiResponse, model, apiKey) {
         try {
             const conversationText = `User: ${userMessage}\nAssistant: ${aiResponse}`;
             const embedding = await this.createEmbedding(conversationText, apiKey, userId, false);
+           const vector = this.normalizeEmbedding(embedding);
             
             const point = {
                 id: uuidv4(),
-                vector: embedding,
+                vector,
                 payload: {
                     guildId,
                     userId,
@@ -199,9 +240,10 @@ class VectorDB {
         try {
             const queryEmbedding = await this.createEmbedding(query, apiKey, userId, true); // true = isQuery
             console.log(`Query embedding length: ${Array.isArray(queryEmbedding) ? queryEmbedding.length : 'invalid'}`);
+           const vector = this.normalizeEmbedding(queryEmbedding);
             
             const searchResponse = await axios.post(`${this.qdrantUrl}/collections/${this.collectionName}/points/search`, {
-                vector: queryEmbedding,
+                vector,
                 filter: {
                     must: [
                         { key: 'guildId', match: { value: guildId } },
@@ -267,6 +309,38 @@ class VectorDB {
             console.log('User history cleared from vector database');
         } catch (error) {
             console.error('Error clearing user history:', error.message);
+        }
+    }
+
+    // Optional: batch store multiple conversations in one request (not used yet)
+    async storeConversationsBatch(items, apiKey) {
+        // items: Array<{ userId, guildId, channelId, userMessage, aiResponse, model }>
+        try {
+            const points = [];
+            for (const item of items) {
+                const conversationText = `User: ${item.userMessage}\nAssistant: ${item.aiResponse}`;
+                const embedding = await this.createEmbedding(conversationText, apiKey, item.userId, false);
+                const vector = this.normalizeEmbedding(embedding);
+                points.push({
+                    id: uuidv4(),
+                    vector,
+                    payload: {
+                        guildId: item.guildId,
+                        userId: item.userId,
+                        channelId: item.channelId,
+                        userMessage: item.userMessage,
+                        aiResponse: item.aiResponse,
+                        model: item.model,
+                        timestamp: new Date().toISOString(),
+                        conversationText,
+                    }
+                });
+            }
+            if (!points.length) return;
+            await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}/points`, { points });
+            console.log(`Batch stored ${points.length} conversations in vector database`);
+        } catch (err) {
+            console.error('Error in batch store:', err.response?.data || err.message);
         }
     }
 }

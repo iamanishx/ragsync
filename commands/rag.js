@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getCache, setCache } = require('../redis/redisUtils');
 const vectorDB = require('../utils/vectorDB');
+const { checkRateLimit } = require('../redis/rateLimiter');
 const { chatWithProvider } = require('../utils/llmProvider');
 
 module.exports = {
@@ -166,6 +167,26 @@ async function handleChat(message, args, userId) {
     }
     
     const guildId = message.guild?.id || 'dm';
+    // Rate limiting: per-user and per-guild
+    const userLimit = parseInt(process.env.RATE_LIMIT_PER_USER_PER_MIN || '10', 10);
+    const guildLimit = parseInt(process.env.RATE_LIMIT_PER_GUILD_PER_MIN || '120', 10);
+    const windowSec = parseInt(process.env.RATE_LIMIT_WINDOW_SEC || '60', 10);
+
+    try {
+        const [userRL, guildRL] = await Promise.all([
+            checkRateLimit({ key: `user:${userId}`, limit: userLimit, windowSec }),
+            checkRateLimit({ key: `guild:${guildId}`, limit: guildLimit, windowSec }),
+        ]);
+        if (!userRL.allowed) {
+            return message.reply(`Hold up—you're going too fast. Try again in ${userRL.resetInSec}s.`);
+        }
+        if (!guildRL.allowed) {
+            return message.reply(`This server is hot right now. Try again in ${guildRL.resetInSec}s.`);
+        }
+    } catch (e) {
+        console.error('Rate limit check failed:', e.message);
+        // Continue if limiter is unavailable
+    }
     const provider = (await getCache(`user:${userId}:selected_provider`)) || process.env.DEFAULT_PROVIDER || 'openrouter';
     const selectedModel = (await getCache(`user:${userId}:selected_model`)) || process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528-qwen3-8b:free';
     const apiKey = (await getCache(`user:${userId}:${provider}_key`))
@@ -340,7 +361,6 @@ async function getConversationHistory(userId, guildId, channelId) {
     try {
         const raw = JSON.parse(cachedHistory);
         const history = sanitizeHistory(raw);
-        // Keep last 10 messages (5 turns), already sanitized
         return history.slice(-10);
     } catch (error) {
         console.error('Error parsing history:', error);
@@ -368,7 +388,6 @@ function trimContextMessages(messages, maxChars) {
     let totalChars = 0;
     
     if (messages[0]?.role === 'system') {
-        // hold system separately to prepend later
         totalChars += messages[0].content.length;
     }
     
@@ -390,14 +409,12 @@ function trimContextMessages(messages, maxChars) {
     
     const ordered = [];
     if (messages[0]?.role === 'system') ordered.push(messages[0]);
-    // body was collected newest->older; reverse to older->newer
     for (let i = body.length - 1; i >= 0; i--) ordered.push(body[i]);
     if (lastMessage?.role === 'user') ordered.push(lastMessage);
     return ordered;
 }
 
 function sanitizeHistory(history) {
-    // Remove malformed entries and generic AI disclaimers that bias answers
     const isGenericAI = (text) => /\b(I am (an|a) large language model|as an ai (language )?model)\b/i.test(text);
     const sanitized = [];
     for (const item of Array.isArray(history) ? history : []) {
@@ -409,7 +426,6 @@ function sanitizeHistory(history) {
         if (role === 'assistant' && isGenericAI(trimmed)) continue;
         sanitized.push({ role, content: trimmed });
     }
-    // Optionally deduplicate consecutive identical messages
     const deduped = [];
     for (const msg of sanitized) {
         const prev = deduped[deduped.length - 1];
@@ -462,9 +478,7 @@ function splitMessage(message, maxLength = 2000) {
 
 function sanitizeAIResponse(text) {
     if (!text) return '';
-    // Remove <think>...</think> style tags if any provider leaks them
     let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-    // Trim generic leading disclaimers
     cleaned = cleaned.replace(/^\s*(As an AI(?: language)? model[,\s])/i, '');
     return cleaned.trim();
 }
