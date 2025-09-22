@@ -2,7 +2,6 @@ require('dotenv').config();
 const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const { Player } = require("discord-player");
 const fs = require('fs');
 const path = require('path');
 const vectorDB = require('./utils/vectorDB');
@@ -35,13 +34,6 @@ for (const file of commandFiles) {
         client.commands.set(command.name, command);
     }
 }
-
-client.player = new Player(client, {
-    ytdlOptions: {
-        quality: "highestaudio",
-        highWaterMark: 1 << 25,
-    },
-});
 
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);

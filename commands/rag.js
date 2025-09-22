@@ -79,14 +79,9 @@ function sanitizeUserInput(text) {
   try {
     t = validator.unescape(t);
   } catch {}
-  // Remove non-printable and non-ASCII characters except common punctuation
   t = t.replace(/[\u0000-\u001F\u007F]/g, "");
-  // Optionally constrain to a safe charset while keeping most languages: here keep ASCII + basic extended
-  // If you want to keep full Unicode (for international users), comment the next line.
   t = t.replace(/[\u0080-\uFFFF]/g, "");
-  // Collapse multiple spaces
   t = t.replace(/\s{2,}/g, " ").trim();
-  // Guard extremely long input
   const MAX_INPUT = parseInt(process.env.MAX_INPUT_CHARS || "4000", 10);
   if (t.length > MAX_INPUT) t = t.slice(0, MAX_INPUT);
   return t;
