@@ -6,6 +6,7 @@ const { Player } = require("discord-player");
 const fs = require('fs');
 const path = require('path');
 const vectorDB = require('./utils/vectorDB');
+const { startPortal } = require('./utils/portal');
 
 const client = new Client({
     intents: [
@@ -52,6 +53,11 @@ client.once('ready', async () => {
 
     // Initialize vector database
     await vectorDB.initialize();
+
+    // Start setup portal if enabled
+    if (process.env.PORTAL_ENABLED === 'true') {
+        try { startPortal(); } catch (e) { console.error('Failed to start portal:', e.message); }
+    }
 
     // Register slash commands for each guild
     const guildIds = client.guilds.cache.map(guild => guild.id);

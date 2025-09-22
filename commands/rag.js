@@ -3,6 +3,8 @@ const { getCache, setCache } = require('../redis/redisUtils');
 const vectorDB = require('../utils/vectorDB');
 const { checkRateLimit } = require('../redis/rateLimiter');
 const { chatWithProvider } = require('../utils/llmProvider');
+const { encryptIfPossible, decryptIfPossible } = require('../utils/secrets');
+const { createSetupLink } = require('../utils/setupLink');
 
 module.exports = {
     name: 'rag',
@@ -47,26 +49,60 @@ module.exports = {
             }
         } catch (error) {
             console.error('Error in RAG command:', error.message);
-            await message.reply('An error occurred while processing your request.');
+            try {
+                await message.reply('An error occurred while processing your request.');
+            } catch {
+                // If original message was deleted (e.g., to protect API key), fall back
+                await message.channel.send('An error occurred while processing your request.');
+            }
         }
     },
 };
 
 async function handleSetup(message, args, userId) {
-    if (!args[0] || !args[1]) {
-        return message.reply('Please provide provider and API key: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|gemini|openai)');
-    }
-    const provider = args[0].toLowerCase() === 'gemini' ? 'google' : args[0].toLowerCase();
+    const inGuild = !!message.guild;
+    const providerArg = args[0]?.toLowerCase();
+    const provider = providerArg === 'gemini' ? 'google' : providerArg;
     const apiKey = args[1];
+
+    // Never accept API keys in guild channels; send secure link instead
+    if (inGuild) {
+        if (apiKey) {
+            // Attempt to delete message to avoid leaking key (requires permissions)
+            try { await message.delete(); } catch {}
+        }
+        const selProvider = provider || (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
+        try {
+            const link = createSetupLink({ userId, guildId: message.guild.id, provider: selProvider, scope: 'user' });
+            try { await message.author.send(`Set your ${selProvider} API key securely:\n${link}\n(Link expires in 10 minutes)`); } catch {}
+            return message.channel.send('I sent you a DM with a secure link to set your API key.');
+        } catch (e) {
+            return message.channel.send('Setup portal is not configured. Admin must set PORTAL_ENABLED=true, PORTAL_BASE_URL or PORTAL_PORT, and PORTAL_SIGNING_SECRET.');
+        }
+    }
+
+    // In DM: accept either direct key, or provide link if missing args
+    if (!provider || !apiKey) {
+        const selProvider = provider || (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
+        try {
+            const link = createSetupLink({ userId, guildId: 'dm', provider: selProvider, scope: 'user' });
+            return message.reply(`Use this secure link to set your ${selProvider} API key:\n${link}\n(Link expires in 10 minutes)`);
+        } catch (e) {
+            return message.reply('Please provide provider and API key in DM: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|gemini|openai)');
+        }
+    }
+
     const userKeyCache = `user:${userId}:${provider}_key`;
-    await setCache(userKeyCache, apiKey, 86400 * 30);
+    const safe = encryptIfPossible(apiKey);
+    await setCache(userKeyCache, safe, 86400 * 30);
     await message.reply(`API key stored for provider: ${provider}.`);
 }
 
 async function handleModels(message, args, userId) {
     const showPaid = args[0] === 'paid';
     const provider = (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
-    const apiKey = await getCache(`user:${userId}:${provider}_key`) || process.env.OPENROUTER_API_KEY;
+    const apiKeyRaw = await getCache(`user:${userId}:${provider}_key`);
+    const apiKey = apiKeyRaw ? decryptIfPossible(apiKeyRaw) : process.env.OPENROUTER_API_KEY;
     
     if (!apiKey) {
         return message.reply('Please setup your API key first: `!rag setup YOUR_API_KEY`');
@@ -104,8 +140,9 @@ async function handleModels(message, args, userId) {
             modelList += `... and ${filteredModels.length - 15} more models\n\n`;
         }
         
-        modelList += `\nUse \`!rag select <model_id>\` to choose a model\n`;
-        modelList += `Use \`!rag models ${showPaid ? '' : 'paid'}\` to see ${showPaid ? 'free' : 'paid'} models\n`;
+    modelList += `\nUse \`!rag select <model_id>\` to choose a model\n`;
+    modelList += `Use \`!rag models ${showPaid ? '' : 'paid'}\` to see ${showPaid ? 'free' : 'paid'} models\n`;
+    modelList += `\nTip: Use \`!rag setup <provider>\` (no key in channel) to receive a secure DM link.\n`;
         
         await message.channel.send(modelList);
         
@@ -189,12 +226,10 @@ async function handleChat(message, args, userId) {
     }
     const provider = (await getCache(`user:${userId}:selected_provider`)) || process.env.DEFAULT_PROVIDER || 'openrouter';
     const selectedModel = (await getCache(`user:${userId}:selected_model`)) || process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528-qwen3-8b:free';
-    const apiKey = (await getCache(`user:${userId}:${provider}_key`))
-        || (guildId !== 'dm' ? await getCache(`guild:${guildId}:${provider}_key`) : null)
-        || (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : provider === 'groq' ? process.env.GROQ_API_KEY : provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : provider === 'google' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
+    const apiKey = await getProviderApiKey(userId, guildId, provider);
     
     if (!apiKey) {
-        return message.reply('No API key found for the selected provider. Add one with `!rag setup <provider> <API_KEY>` (e.g., `!rag setup google <GEMINI_KEY>` or `!rag setup openrouter <OPENROUTER_KEY>`), or set env defaults.');
+        return message.reply('No API key found. Use `!rag setup <provider>` and I will DM you a secure link, or set env defaults.');
     }
     
     const userMessage = args.join(' ');
@@ -280,6 +315,23 @@ async function handleChat(message, args, userId) {
         } else {
             await message.reply('An error occurred while processing your message. Please try again.');
         }
+    }
+}
+
+async function getProviderApiKey(userId, guildId, provider) {
+    const userVal = await getCache(`user:${userId}:${provider}_key`);
+    if (userVal) return decryptIfPossible(userVal);
+    if (guildId && guildId !== 'dm') {
+        const guildVal = await getCache(`guild:${guildId}:${provider}_key`);
+        if (guildVal) return decryptIfPossible(guildVal);
+    }
+    switch (provider) {
+        case 'openrouter': return process.env.OPENROUTER_API_KEY || null;
+        case 'groq': return process.env.GROQ_API_KEY || null;
+        case 'anthropic': return process.env.ANTHROPIC_API_KEY || null;
+        case 'google': return process.env.GEMINI_API_KEY || null;
+        case 'openai': return process.env.OPENAI_API_KEY || null;
+        default: return null;
     }
 }
 

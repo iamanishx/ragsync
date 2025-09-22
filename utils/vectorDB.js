@@ -15,7 +15,6 @@ class VectorDB {
         );
         this.embeddingDim = parseInt(process.env.EMBEDDINGS_DIM || '768', 10);
         this.fallbackEmbeddingModel = 'embedding-001';
-        // Concurrency limiter for embedding requests
         const maxConcurrent = parseInt(process.env.EMBED_MAX_CONCURRENCY || '5', 10);
         const minTime = parseInt(process.env.EMBED_MIN_TIME_MS || '0', 10);
         this.embedLimiter = new Bottleneck({ maxConcurrent, minTime });
@@ -53,7 +52,6 @@ class VectorDB {
                             }
                         }
                     });
-                    // Create payload indexes for common filters
                     await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}/index`, {
                         field_name: 'guildId',
                         field_schema: 'keyword',
@@ -142,7 +140,6 @@ class VectorDB {
         console.log('Using local embedding generation as last resort...');
         return this.createLocalEmbedding(text);
         };
-        // Run under limiter
         return this.embedLimiter.schedule(run);
     }
 
@@ -196,7 +193,6 @@ class VectorDB {
         return embedding.map(val => magnitude > 0 ? val / magnitude : 0);
     }
 
-    // Ensure vector length matches collection size and is L2-normalized for cosine
     normalizeEmbedding(vec) {
         if (!Array.isArray(vec)) return null;
         const out = vec.slice(0, this.embeddingDim);
@@ -312,9 +308,7 @@ class VectorDB {
         }
     }
 
-    // Optional: batch store multiple conversations in one request (not used yet)
     async storeConversationsBatch(items, apiKey) {
-        // items: Array<{ userId, guildId, channelId, userMessage, aiResponse, model }>
         try {
             const points = [];
             for (const item of items) {
