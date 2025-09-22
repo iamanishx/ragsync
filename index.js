@@ -18,11 +18,9 @@ const client = new Client({
     ],
 });
 
-// Initialize collections for commands
 client.commands = new Collection();
 const commands = [];
 
-// Load commands from the commands folder
 const commandsPath = path.join(__dirname, "commands");
 const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
 
@@ -30,7 +28,6 @@ for (const file of commandFiles) {
     const filePath = path.join(commandsPath, file);
     const command = require(filePath);
 
-    // Ensure command is properly structured
     if (command.data && command.data.name) {
         client.commands.set(command.data.name, command);
         commands.push(command.data.toJSON());
@@ -39,7 +36,6 @@ for (const file of commandFiles) {
     }
 }
 
-// Initialize the Player instance
 client.player = new Player(client, {
     ytdlOptions: {
         quality: "highestaudio",
@@ -51,15 +47,12 @@ client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     client.user.setActivity('your activity', { type: 'WATCHING' });
 
-    // Initialize vector database
     await vectorDB.initialize();
 
-    // Start setup portal if enabled
     if (process.env.PORTAL_ENABLED === 'true') {
         try { startPortal(); } catch (e) { console.error('Failed to start portal:', e.message); }
     }
 
-    // Register slash commands for each guild
     const guildIds = client.guilds.cache.map(guild => guild.id);
     const rest = new REST({ version: '9' }).setToken(process.env.TOKEN);
 
@@ -70,7 +63,6 @@ client.once('ready', async () => {
     }
 });
 
-// Handle slash commands
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
 
@@ -85,7 +77,6 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Handle prefix-based commands (e.g., !command)
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith('!')) return;
 
