@@ -5,8 +5,16 @@ class VectorDB {
     constructor() {
         this.qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
         this.collectionName = 'discord_conversations';
-        this.embeddingModel = 'gemini-embedding-001'; 
-        this.fallbackEmbeddingModel = 'embedding-001'; 
+        // Centralized embedding configuration (server-managed)
+        this.embeddingProvider = (process.env.EMBEDDINGS_PROVIDER || 'huggingface').toLowerCase();
+        this.embeddingModel = process.env.EMBEDDINGS_MODEL || (
+            this.embeddingProvider === 'google' ? 'text-embedding-004' :
+            this.embeddingProvider === 'openai' ? 'text-embedding-3-small' :
+            this.embeddingProvider === 'openrouter' ? 'openai/text-embedding-3-small' :
+            'BAAI/bge-base-en-v1.5'
+        );
+        this.embeddingDim = parseInt(process.env.EMBEDDINGS_DIM || '768', 10);
+        this.fallbackEmbeddingModel = 'embedding-001';
     }
 
     async initialize() {
@@ -27,11 +35,11 @@ class VectorDB {
                 try {
                     await axios.put(`${this.qdrantUrl}/collections/${this.collectionName}`, {
                         vectors: {
-                            size: 768, 
+                            size: this.embeddingDim,
                             distance: 'Cosine'
                         }
                     });
-                    console.log('Collection created successfully with 768-dimensional vectors for Google embeddings');
+                    console.log(`Collection created successfully with ${this.embeddingDim}-dimensional vectors for embeddings`);
                 } catch (createError) {
                     console.error('Failed to create collection:', createError.message);
                 }
@@ -41,81 +49,78 @@ class VectorDB {
         }
     }
 
-    async createEmbedding(text, apiKey, userId = null, isQuery = false) {
-        if (userId) {
-            const { getCache } = require('../redis/redisUtils');
-            const embeddingMode = await getCache(`user:${userId}:embedding_mode`);
-            
-            if (embeddingMode === 'paid' && apiKey) {
-                try {
-                    console.log('Using paid OpenRouter embeddings...');
-                    const response = await axios.post('https://openrouter.ai/api/v1/embeddings', {
-                        model: 'openai/text-embedding-3-small',
-                        input: text,
-                        dimensions: 768  // Changed from 384 to 768 to match vector DB
-                    }, {
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    return response.data.data[0].embedding;
-                } catch (error) {
-                    console.log('Paid embedding failed, falling back to Google embeddings...');
-                    console.error('Error:', error.response?.data || error.message);
-                }
+    async createEmbedding(text, _apiKeyIgnored, _userIdIgnored = null, isQuery = false) {
+        // Centralized embedding selection based on env config
+        const provider = this.embeddingProvider;
+        const model = this.embeddingModel;
+
+        try {
+            if (provider === 'google') {
+                const geminiKey = process.env.GEMINI_API_KEY;
+                if (!geminiKey) throw new Error('GEMINI_API_KEY not set');
+                const taskType = isQuery ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT';
+                const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${geminiKey}`, {
+                    content: { parts: [{ text }] },
+                    taskType,
+                    outputDimensionality: this.embeddingDim
+                }, { headers: { 'Content-Type': 'application/json' } });
+                return res.data.embedding.values;
             }
-        }
-        
-        const geminiKey = process.env.GEMINI_API_KEY;
-        if (geminiKey) {
-            try {
-                console.log('Using Google Gemini embeddings...');
-                
-                const taskType = isQuery ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
-                
-                const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.embeddingModel}:embedContent?key=${geminiKey}`, {
-                    content: {
-                        parts: [{ text: text }]
-                    },
-                    taskType: taskType,
-                    outputDimensionality: 768
-                }, {
-                    headers: {
-                        'Content-Type': 'application/json'
+
+            if (provider === 'openai') {
+                const key = process.env.OPENAI_API_KEY;
+                if (!key) throw new Error('OPENAI_API_KEY not set');
+                const res = await axios.post('https://api.openai.com/v1/embeddings', {
+                    model,
+                    input: text,
+                    dimensions: this.embeddingDim
+                }, { headers: { Authorization: `Bearer ${key}` } });
+                return res.data.data[0].embedding;
+            }
+
+            if (provider === 'openrouter') {
+                const key = process.env.OPENROUTER_API_KEY;
+                if (!key) throw new Error('OPENROUTER_API_KEY not set');
+                const res = await axios.post('https://openrouter.ai/api/v1/embeddings', {
+                    model,
+                    input: text,
+                    dimensions: this.embeddingDim
+                }, { headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+                return res.data.data[0].embedding;
+            }
+
+            if (provider === 'huggingface') {
+                const hfToken = process.env.HF_TOKEN;
+                if (!hfToken) throw new Error('HF_TOKEN not set');
+                const res = await axios.post(`https://api-inference.huggingface.co/models/${model}`, {
+                    inputs: text,
+                    options: { wait_for_model: true }
+                }, { headers: { Authorization: `Bearer ${hfToken}`, 'Content-Type': 'application/json' } });
+                const data = res.data;
+                // If API returns nested arrays (token embeddings), average-pool to a single vector
+                if (Array.isArray(data) && Array.isArray(data[0])) {
+                    const tokens = data;
+                    const dim = tokens[0].length;
+                    const pooled = new Array(dim).fill(0);
+                    for (const vec of tokens) {
+                        for (let i = 0; i < dim; i++) pooled[i] += vec[i];
                     }
-                });
-                
-                return response.data.embedding.values;
-            } catch (error) {
-                console.log('Primary Google embedding failed, trying legacy model...');
-                console.error('Error:', error.response?.data || error.message);
-                
-                try {
-                    const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${this.fallbackEmbeddingModel}:embedContent?key=${geminiKey}`, {
-                        content: {
-                            parts: [{ text: text }]
-                        }
-                    }, {
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                    
-                    return response.data.embedding.values;
-                } catch (fallbackError) {
-                    console.log('Google embedding fallback failed, using local embeddings...');
-                    console.error('Fallback Error:', fallbackError.response?.data || fallbackError.message);
+                    for (let i = 0; i < dim; i++) pooled[i] /= tokens.length;
+                    return pooled;
                 }
+                // Otherwise assume it's already a sentence vector
+                return data;
             }
+        } catch (err) {
+            console.error('Embedding API error:', err.response?.data || err.message);
         }
-        
+
         console.log('Using local embedding generation as last resort...');
         return this.createLocalEmbedding(text);
     }
 
     createLocalEmbedding(text) {
-        const embedding = new Array(768).fill(0);
+    const embedding = new Array(this.embeddingDim).fill(0);
         const words = text.toLowerCase().split(/\s+/);
         const sentences = text.split(/[.!?]+/);
         const wordFreq = {};
@@ -130,8 +135,8 @@ class VectorDB {
             
             for (let j = 0; j < word.length; j++) {
                 const charCode = word.charCodeAt(j);
-                const index1 = (charCode + i * 7 + j * 13) % 768;
-                const index2 = (charCode * freq + i * 17) % 768;
+                const index1 = (charCode + i * 7 + j * 13) % this.embeddingDim;
+                const index2 = (charCode * freq + i * 17) % this.embeddingDim;
                 
                 embedding[index1] += (1 + Math.log(freq)) * (1 - position * 0.1);
                 embedding[index2] += Math.sin(charCode / 100) * freq;
@@ -140,7 +145,7 @@ class VectorDB {
             if (i < words.length - 1) {
                 const bigram = word + words[i + 1];
                 for (let k = 0; k < Math.min(bigram.length, 10); k++) {
-                    const index = (bigram.charCodeAt(k) * (k + 1) + i) % 768;
+                    const index = (bigram.charCodeAt(k) * (k + 1) + i) % this.embeddingDim;
                     embedding[index] += 0.5;
                 }
             }

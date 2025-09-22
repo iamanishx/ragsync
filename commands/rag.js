@@ -33,9 +33,6 @@ module.exports = {
                 case 'search':
                     await handleSearchHistory(message, args.slice(1), userId);
                     break;
-                case 'embeddings':
-                    await handleEmbeddingMode(message, args.slice(1), userId);
-                    break;
                 case 'plan':
                     await handlePlan(message, args.slice(1), userId);
                     break;
@@ -43,7 +40,7 @@ module.exports = {
                     if (!subcommand) {
                         await handleChat(message, args, userId);
                     } else {
-                        await message.reply(`Unknown command. Use: \`!rag setup <api_key>\`, \`!rag provider <openrouter|groq|anthropic|google>\`, \`!rag models\`, \`!rag select <model_name>\`, \`!rag embeddings <free|paid>\`, \`!rag chat <message>\`, \`!rag search <query>\`, \`!rag plan <basic|pro>\`, or \`!rag clear\``);
+                        await message.reply(`Unknown command. Use: \`!rag setup <provider> <API_KEY>\`, \`!rag provider <openrouter|groq|anthropic|google|openai|gemini>\`, \`!rag models\`, \`!rag select <model_name>\`, \`!rag chat <message>\`, \`!rag search <query>\`, \`!rag plan <basic|pro>\`, or \`!rag clear\`\n(Note: Embeddings are managed centrally and do not require your key.)`);
                     }
                     break;
             }
@@ -56,30 +53,16 @@ module.exports = {
 
 async function handleSetup(message, args, userId) {
     if (!args[0] || !args[1]) {
-        return message.reply('Please provide provider and API key: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|openai)');
+        return message.reply('Please provide provider and API key: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|gemini|openai)');
     }
-    const provider = args[0].toLowerCase();
+    const provider = args[0].toLowerCase() === 'gemini' ? 'google' : args[0].toLowerCase();
     const apiKey = args[1];
     const userKeyCache = `user:${userId}:${provider}_key`;
     await setCache(userKeyCache, apiKey, 86400 * 30);
     await message.reply(`✅ API key stored for provider: ${provider}.`);
 }
 
-async function handleEmbeddingMode(message, args, userId) {
-    const mode = args[0]?.toLowerCase();
-    if (!mode || !['free', 'paid'].includes(mode)) {
-        return message.reply('❌ Please specify embedding mode: `!rag embeddings free` or `!rag embeddings paid`');
-    }
-    
-    const userEmbeddingCache = `user:${userId}:embedding_mode`;
-    await setCache(userEmbeddingCache, mode, 86400 * 30);
-    
-    if (mode === 'free') {
-        await message.reply('✅ **Free Google Embeddings** enabled!\n🔹 Uses your existing Gemini API key\n🔹 High-quality Google text-embedding-004 model\n🔹 Excellent semantic search quality\n🔹 768-dimensional embeddings\n\n*This is the recommended mode using your Google API key.*');
-    } else {
-        await message.reply('✅ **Paid OpenRouter Embeddings** enabled!\n🔹 Uses OpenAI text-embedding-3-small model\n🔹 Uses your OpenRouter API credits\n🔹 Alternative high-quality embeddings\n🔹 Falls back to Google embeddings if unavailable\n\n*Uses OpenRouter credits for embedding API calls.*');
-    }
-}
+// Embedding mode command removed — embeddings are centrally configured by server owner via env (.env)
 
 async function handleModels(message, args, userId) {
     const showPaid = args[0] === 'paid';
@@ -146,11 +129,25 @@ async function handleModelSelect(message, args, userId) {
 }
 
 async function handleProviderSelect(message, args, userId) {
-    const provider = args[0]?.toLowerCase();
+    const input = args[0]?.toLowerCase();
+    const provider = input === 'gemini' ? 'google' : input;
     if (!provider || !['openrouter', 'groq', 'anthropic', 'google', 'openai'].includes(provider)) {
-        return message.reply('Please specify a provider: `!rag provider <openrouter|groq|anthropic|google|openai>`');
+        return message.reply('Please specify a provider: `!rag provider <openrouter|groq|anthropic|google|gemini|openai>`');
     }
     await setCache(`user:${userId}:selected_provider`, provider, 86400 * 30);
+
+    // Set a sensible default model per provider if user hasn't chosen one yet
+    const currentModel = await getCache(`user:${userId}:selected_model`);
+    if (!currentModel) {
+        const defaults = {
+            openrouter: 'deepseek/deepseek-r1-0528-qwen3-8b:free',
+            groq: 'llama-3.1-8b-instant',
+            anthropic: 'claude-3-5-sonnet-latest',
+            google: 'gemini-1.5-flash',
+            openai: 'gpt-4o-mini'
+        };
+        await setCache(`user:${userId}:selected_model`, defaults[provider], 86400 * 30);
+    }
     await message.reply(`✅ Provider selected: ${provider}`);
 }
 
@@ -179,7 +176,7 @@ async function handleChat(message, args, userId) {
         || (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : provider === 'groq' ? process.env.GROQ_API_KEY : provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : provider === 'google' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
     
     if (!apiKey) {
-        return message.reply('No API key found. Use `!rag setup <provider> <API_KEY>` or configure env defaults.');
+        return message.reply('No API key found for the selected provider. Add one with `!rag setup <provider> <API_KEY>` (e.g., `!rag setup google <GEMINI_KEY>` or `!rag setup openrouter <OPENROUTER_KEY>`), or set env defaults.');
     }
     
     const userMessage = args.join(' ');
@@ -247,13 +244,13 @@ async function handleChat(message, args, userId) {
         console.error('Error in chat:', error.response?.data || error.message);
         
         if (error.response?.status === 401) {
-            await message.reply('Invalid API key. Please setup again: `!rag setup YOUR_API_KEY`');
+            await message.reply('Invalid API key for the selected provider. Re-run `!rag setup <provider> <API_KEY>`.');
         } else if (error.response?.status === 400) {
             console.error('Bad request details:', error.response?.data);
             await message.reply('Invalid model or request. Please select a different model or try again.');
         } else if (error.response?.status === 500) {
             console.error('Server error details:', error.response?.data);
-            await message.reply('OpenRouter server error. The messages may be too long or malformed. Try `!rag clear` to reset history.');
+            await message.reply('Provider server error. The messages may be too long or malformed. Try `!rag clear` to reset history.');
         } else if (error.response?.status === 413 || error.message.includes('context')) {
             await message.reply('Message too long for model context. Try a shorter message or use `!rag clear` to reset conversation history.');
         } else {
