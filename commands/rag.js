@@ -65,10 +65,8 @@ async function handleSetup(message, args, userId) {
     const provider = providerArg === 'gemini' ? 'google' : providerArg;
     const apiKey = args[1];
 
-    // Never accept API keys in guild channels; send secure link instead
     if (inGuild) {
         if (apiKey) {
-            // Attempt to delete message to avoid leaking key (requires permissions)
             try { await message.delete(); } catch {}
         }
         const selProvider = provider || (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
