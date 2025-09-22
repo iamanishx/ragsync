@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { getCache, setCache } = require('../redis/redisUtils');
 const vectorDB = require('../utils/vectorDB');
+const { chatWithProvider } = require('../utils/llmProvider');
 
 module.exports = {
     name: 'rag',
@@ -17,6 +18,9 @@ module.exports = {
                 case 'models':
                     await handleModels(message, args.slice(1), userId);
                     break;
+                case 'provider':
+                    await handleProviderSelect(message, args.slice(1), userId);
+                    break;
                 case 'select':
                     await handleModelSelect(message, args.slice(1), userId);
                     break;
@@ -32,11 +36,14 @@ module.exports = {
                 case 'embeddings':
                     await handleEmbeddingMode(message, args.slice(1), userId);
                     break;
+                case 'plan':
+                    await handlePlan(message, args.slice(1), userId);
+                    break;
                 default:
                     if (!subcommand) {
                         await handleChat(message, args, userId);
                     } else {
-                        await message.reply(`Unknown command. Use: \`!rag setup <api_key>\`, \`!rag models\`, \`!rag select <model_name>\`, \`!rag embeddings <free|paid>\`, \`!rag chat <message>\`, \`!rag search <query>\`, or \`!rag clear\``);
+                        await message.reply(`Unknown command. Use: \`!rag setup <api_key>\`, \`!rag provider <openrouter|groq|anthropic|google>\`, \`!rag models\`, \`!rag select <model_name>\`, \`!rag embeddings <free|paid>\`, \`!rag chat <message>\`, \`!rag search <query>\`, \`!rag plan <basic|pro>\`, or \`!rag clear\``);
                     }
                     break;
             }
@@ -48,15 +55,14 @@ module.exports = {
 };
 
 async function handleSetup(message, args, userId) {
-    if (!args[0]) {
-        return message.reply('Please provide your OpenRouter API key: `!rag setup YOUR_API_KEY`');
+    if (!args[0] || !args[1]) {
+        return message.reply('Please provide provider and API key: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|openai)');
     }
-    
-    const apiKey = args[0];
-    const userKeyCache = `user:${userId}:openrouter_key`;
-    
+    const provider = args[0].toLowerCase();
+    const apiKey = args[1];
+    const userKeyCache = `user:${userId}:${provider}_key`;
     await setCache(userKeyCache, apiKey, 86400 * 30);
-    await message.reply('✅ API key stored successfully! Use `!rag models` to see available models.');
+    await message.reply(`✅ API key stored for provider: ${provider}.`);
 }
 
 async function handleEmbeddingMode(message, args, userId) {
@@ -77,15 +83,19 @@ async function handleEmbeddingMode(message, args, userId) {
 
 async function handleModels(message, args, userId) {
     const showPaid = args[0] === 'paid';
-    const userKeyCache = `user:${userId}:openrouter_key`;
-    const apiKey = await getCache(userKeyCache);
+    const provider = (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
+    const apiKey = await getCache(`user:${userId}:${provider}_key`) || process.env.OPENROUTER_API_KEY;
     
     if (!apiKey) {
         return message.reply('Please setup your API key first: `!rag setup YOUR_API_KEY`');
     }
     
     try {
-        const response = await axios.get('https://openrouter.ai/api/v1/models', {
+        const baseURL = provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : provider === 'groq' ? 'https://api.groq.com/openai/v1' : null;
+        if (!baseURL) {
+            return message.reply('Listing models is supported for OpenRouter and Groq via this command.');
+        }
+        const response = await axios.get(`${baseURL}/models`, {
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
@@ -135,23 +145,41 @@ async function handleModelSelect(message, args, userId) {
     await message.reply(`✅ Model selected: **${modelId}**\nYou can now start chatting with \`!rag chat <message>\` or just \`!rag <message>\`\n\n*Tip: Use \`!rag clear\` if conversations get too long for the context window.*`);
 }
 
+async function handleProviderSelect(message, args, userId) {
+    const provider = args[0]?.toLowerCase();
+    if (!provider || !['openrouter', 'groq', 'anthropic', 'google', 'openai'].includes(provider)) {
+        return message.reply('Please specify a provider: `!rag provider <openrouter|groq|anthropic|google|openai>`');
+    }
+    await setCache(`user:${userId}:selected_provider`, provider, 86400 * 30);
+    await message.reply(`✅ Provider selected: ${provider}`);
+}
+
+async function handlePlan(message, args, userId) {
+    const plan = args[0]?.toLowerCase();
+    if (!plan || !['basic', 'pro'].includes(plan)) {
+        return message.reply('Please specify a plan: `!rag plan <basic|pro>`');
+    }
+    const guildId = message.guild?.id;
+    if (!guildId) return message.reply('This command must be used in a server.');
+    await setCache(`guild:${guildId}:plan`, plan, 86400 * 30);
+    await message.reply(`✅ Plan set for this server: ${plan}`);
+}
+
 async function handleChat(message, args, userId) {
     if (!args.length) {
         return message.reply('Please provide a message to chat.');
     }
     
-    const userKeyCache = `user:${userId}:openrouter_key`;
-    const userModelCache = `user:${userId}:selected_model`;
-    
-    const apiKey = await getCache(userKeyCache);
-    const selectedModel = await getCache(userModelCache);
+    const guildId = message.guild?.id || 'dm';
+    const provider = (await getCache(`user:${userId}:selected_provider`)) || process.env.DEFAULT_PROVIDER || 'openrouter';
+    const selectedModel = (await getCache(`user:${userId}:selected_model`)) || process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528-qwen3-8b:free';
+    // Resolve API key precedence: user > guild > env default
+    const apiKey = (await getCache(`user:${userId}:${provider}_key`))
+        || (guildId !== 'dm' ? await getCache(`guild:${guildId}:${provider}_key`) : null)
+        || (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : provider === 'groq' ? process.env.GROQ_API_KEY : provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : provider === 'google' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
     
     if (!apiKey) {
-        return message.reply('Please setup your API key first: `!rag setup YOUR_API_KEY`');
-    }
-    
-    if (!selectedModel) {
-        return message.reply('Please select a model first: `!rag models` then `!rag select <model_id>`');
+        return message.reply('No API key found. Use `!rag setup <provider> <API_KEY>` or configure env defaults.');
     }
     
     const userMessage = args.join(' ');
@@ -161,10 +189,10 @@ async function handleChat(message, args, userId) {
         await message.channel.sendTyping();
         
         console.log('Searching similar conversations...');
-        const similarConversations = await vectorDB.searchSimilarConversations(userMessage, userId, channelId, apiKey, 3);
+    const similarConversations = await vectorDB.searchSimilarConversations(userMessage, userId, guildId, channelId, apiKey, 3);
         console.log('Found similar conversations:', similarConversations);
         
-        const recentHistory = await getConversationHistory(userId, channelId);
+    const recentHistory = await getConversationHistory(userId, guildId, channelId);
         let contextMessages = [];
         
         contextMessages.push(...recentHistory);
@@ -187,7 +215,7 @@ async function handleChat(message, args, userId) {
         const messages = [
             {
                 role: 'system',
-                content: 'You are a helpful AI assistant. Answer the user\'s questions directly and accurately. Use any relevant conversation history provided to give contextual responses. Be concise but informative.'
+                content: 'You are a helpful AI assistant. Answer the user\'s questions directly and accurately. Use any relevant conversation history provided to give contextual responses. Be concise but informative. Do not include hidden reasoning, chain-of-thought, or <think> content; provide only the final answer.'
             },
             ...contextMessages,
             {
@@ -195,81 +223,25 @@ async function handleChat(message, args, userId) {
                 content: userMessage
             }
         ];
-        
-        const cleanedMessages = messages.map(msg => {
-            if (msg.role === 'assistant' && msg.content) {
-                let cleanedContent = msg.content;
-                
-                cleanedContent = cleanedContent.replace(/<think>[\s\S]*?<\/think>/g, '');
-                cleanedContent = cleanedContent.replace(/<\/think>/g, '');
-                
-                const thinkingPatterns = [
-                    /^Okay, the user.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^Let me.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^I need to.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^First, I.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^Looking back.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^Since.*?(?=\n\n|\n[A-Z]|$)/s,
-                    /^The user.*?(?=\n\n|\n[A-Z]|$)/s
-                ];
-                
-                thinkingPatterns.forEach(pattern => {
-                    cleanedContent = cleanedContent.replace(pattern, '');
-                });
-                
-                cleanedContent = cleanedContent.replace(/\n{3,}/g, '\n\n').trim();
-                
-                if (!cleanedContent || cleanedContent.length < 10) {
-                    cleanedContent = "I understand.";
-                }
-                
-                return {
-                    role: msg.role,
-                    content: cleanedContent
-                };
-            }
-            return msg;
-        });
-
-        const trimmedMessages = trimContextMessages(cleanedMessages, 8000);
+        const trimmedMessages = trimContextMessages(messages, 8000);
 
         console.log(`Using ${trimmedMessages.length} messages for context`);
         console.log('Final messages to API:', JSON.stringify(trimmedMessages, null, 2));
         
-        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+        const { text: aiResponse } = await chatWithProvider({
+            provider,
+            apiKey,
             model: selectedModel,
             messages: trimmedMessages,
-            max_tokens: 1000,
             temperature: 0.7,
-            stream: false 
-        }, {
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://discord.com',
-                'X-Title': 'Discord Bot'
-            }
+            maxTokens: 1000,
+            headers: { 'HTTP-Referer': 'https://discord.com', 'X-Title': 'Discord Bot' },
         });
-        
-        console.log('Full API Response:', JSON.stringify(response.data, null, 2));
-        
-        if (!response.data.choices || !response.data.choices[0] || !response.data.choices[0].message) {
-            console.error('Invalid API response structure:', response.data);
-            if (response.data.error) {
-                await message.reply(`API Error: ${response.data.error.message} (Code: ${response.data.error.code})`);
-            } else {
-                await message.reply('Received invalid response from the API. Please try again.');
-            }
-            return;
-        }
-        
-        const aiResponse = response.data.choices[0].message.content;
         console.log('API Response:', aiResponse);
         
-        await storeConversation(userId, channelId, userMessage, aiResponse, selectedModel);
-        await vectorDB.storeConversation(userId, channelId, userMessage, aiResponse, selectedModel, apiKey);
-        
-        await sendResponseWithTyping(message.channel, aiResponse);
+    await storeConversation(userId, guildId, channelId, userMessage, aiResponse, selectedModel);
+    await vectorDB.storeConversation(userId, guildId, channelId, userMessage, aiResponse, selectedModel, apiKey);
+    await sendResponseWithTyping(message.channel, aiResponse);
         
     } catch (error) {
         console.error('Error in chat:', error.response?.data || error.message);
@@ -292,12 +264,12 @@ async function handleChat(message, args, userId) {
 
 async function handleClearHistory(message, userId) {
     const channelId = message.channel.id;
-    const historyKey = `conversation:${userId}:${channelId}`;
+    const guildId = message.guild?.id || 'dm';
+    const historyKey = `conversation:${guildId}:${channelId}:${userId}`;
     
     try {
-        await setCache(historyKey, JSON.stringify([]), 86400 * 7);
-        
-        await vectorDB.clearUserHistory(userId, channelId);
+    await setCache(historyKey, JSON.stringify([]), 86400 * 7);
+    await vectorDB.clearUserHistory(userId, guildId, channelId);
         
         await message.reply('✅ Conversation history cleared for this channel.');
     } catch (error) {
@@ -313,8 +285,9 @@ async function handleSearchHistory(message, args, userId) {
     
     const query = args.join(' ');
     const channelId = message.channel.id;
-    const userKeyCache = `user:${userId}:openrouter_key`;
-    const apiKey = await getCache(userKeyCache);
+    const guildId = message.guild?.id || 'dm';
+    const provider = (await getCache(`user:${userId}:selected_provider`)) || 'openrouter';
+    const apiKey = await getCache(`user:${userId}:${provider}_key`) || process.env.OPENROUTER_API_KEY;
     
     if (!apiKey) {
         return message.reply('Please setup your API key first: `!rag setup YOUR_API_KEY`');
@@ -323,7 +296,7 @@ async function handleSearchHistory(message, args, userId) {
     try {
         await message.channel.sendTyping();
         
-        const similarConversations = await vectorDB.searchSimilarConversations(query, userId, channelId, apiKey, 5);
+    const similarConversations = await vectorDB.searchSimilarConversations(query, userId, guildId, channelId, apiKey, 5);
         
         if (similarConversations.length === 0) {
             return message.reply('No relevant conversations found.');
@@ -356,8 +329,8 @@ async function handleSearchHistory(message, args, userId) {
     }
 }
 
-async function getConversationHistory(userId, channelId) {
-    const historyKey = `conversation:${userId}:${channelId}`;
+async function getConversationHistory(userId, guildId, channelId) {
+    const historyKey = `conversation:${guildId}:${channelId}:${userId}`;
     const cachedHistory = await getCache(historyKey);
     
     if (!cachedHistory) {
@@ -373,9 +346,9 @@ async function getConversationHistory(userId, channelId) {
     }
 }
 
-async function storeConversation(userId, channelId, userMessage, aiResponse, model) {
-    const historyKey = `conversation:${userId}:${channelId}`;
-    const history = await getConversationHistory(userId, channelId);
+async function storeConversation(userId, guildId, channelId, userMessage, aiResponse, model) {
+    const historyKey = `conversation:${guildId}:${channelId}:${userId}`;
+    const history = await getConversationHistory(userId, guildId, channelId);
     
     history.push(
         { role: 'user', content: userMessage },
@@ -386,6 +359,7 @@ async function storeConversation(userId, channelId, userMessage, aiResponse, mod
     
     await setCache(historyKey, JSON.stringify(trimmedHistory), 86400 * 7);
 }
+
 
 function trimContextMessages(messages, maxChars) {
     const trimmed = [];

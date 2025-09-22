@@ -164,7 +164,7 @@ class VectorDB {
         return embedding.map(val => magnitude > 0 ? val / magnitude : 0);
     }
 
-    async storeConversation(userId, channelId, userMessage, aiResponse, model, apiKey) {
+    async storeConversation(userId, guildId, channelId, userMessage, aiResponse, model, apiKey) {
         try {
             const conversationText = `User: ${userMessage}\nAssistant: ${aiResponse}`;
             const embedding = await this.createEmbedding(conversationText, apiKey, userId, false);
@@ -173,6 +173,7 @@ class VectorDB {
                 id: uuidv4(),
                 vector: embedding,
                 payload: {
+                    guildId,
                     userId,
                     channelId,
                     userMessage,
@@ -193,7 +194,7 @@ class VectorDB {
         }
     }
 
-    async searchSimilarConversations(query, userId, channelId, apiKey, limit = 5) {
+    async searchSimilarConversations(query, userId, guildId, channelId, apiKey, limit = 5) {
         try {
             const queryEmbedding = await this.createEmbedding(query, apiKey, userId, true); // true = isQuery
             console.log(`Query embedding length: ${Array.isArray(queryEmbedding) ? queryEmbedding.length : 'invalid'}`);
@@ -202,6 +203,7 @@ class VectorDB {
                 vector: queryEmbedding,
                 filter: {
                     must: [
+                        { key: 'guildId', match: { value: guildId } },
                         { key: 'userId', match: { value: userId } },
                         { key: 'channelId', match: { value: channelId } }
                     ]
@@ -223,11 +225,12 @@ class VectorDB {
         }
     }
 
-    async getRecentConversations(userId, channelId, limit = 10) {
+    async getRecentConversations(userId, guildId, channelId, limit = 10) {
         try {
             const scrollResponse = await axios.post(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
                 filter: {
                     must: [
+                        { key: 'guildId', match: { value: guildId } },
                         { key: 'userId', match: { value: userId } },
                         { key: 'channelId', match: { value: channelId } }
                     ]
@@ -249,11 +252,12 @@ class VectorDB {
         }
     }
 
-    async clearUserHistory(userId, channelId) {
+    async clearUserHistory(userId, guildId, channelId) {
         try {
             await axios.post(`${this.qdrantUrl}/collections/${this.collectionName}/points/delete`, {
                 filter: {
                     must: [
+                        { key: 'guildId', match: { value: guildId } },
                         { key: 'userId', match: { value: userId } },
                         { key: 'channelId', match: { value: channelId } }
                     ]
