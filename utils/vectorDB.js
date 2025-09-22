@@ -5,7 +5,6 @@ class VectorDB {
     constructor() {
         this.qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
         this.collectionName = 'discord_conversations';
-        // Centralized embedding configuration (server-managed)
         this.embeddingProvider = (process.env.EMBEDDINGS_PROVIDER || 'huggingface').toLowerCase();
         this.embeddingModel = process.env.EMBEDDINGS_MODEL || (
             this.embeddingProvider === 'google' ? 'text-embedding-004' :
@@ -50,7 +49,6 @@ class VectorDB {
     }
 
     async createEmbedding(text, _apiKeyIgnored, _userIdIgnored = null, isQuery = false) {
-        // Centralized embedding selection based on env config
         const provider = this.embeddingProvider;
         const model = this.embeddingModel;
 
@@ -97,7 +95,6 @@ class VectorDB {
                     options: { wait_for_model: true }
                 }, { headers: { Authorization: `Bearer ${hfToken}`, 'Content-Type': 'application/json' } });
                 const data = res.data;
-                // If API returns nested arrays (token embeddings), average-pool to a single vector
                 if (Array.isArray(data) && Array.isArray(data[0])) {
                     const tokens = data;
                     const dim = tokens[0].length;
@@ -108,7 +105,6 @@ class VectorDB {
                     for (let i = 0; i < dim; i++) pooled[i] /= tokens.length;
                     return pooled;
                 }
-                // Otherwise assume it's already a sentence vector
                 return data;
             }
         } catch (err) {

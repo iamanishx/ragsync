@@ -59,10 +59,8 @@ async function handleSetup(message, args, userId) {
     const apiKey = args[1];
     const userKeyCache = `user:${userId}:${provider}_key`;
     await setCache(userKeyCache, apiKey, 86400 * 30);
-    await message.reply(`✅ API key stored for provider: ${provider}.`);
+    await message.reply(`API key stored for provider: ${provider}.`);
 }
-
-// Embedding mode command removed — embeddings are centrally configured by server owner via env (.env)
 
 async function handleModels(message, args, userId) {
     const showPaid = args[0] === 'paid';
@@ -125,7 +123,7 @@ async function handleModelSelect(message, args, userId) {
     const userModelCache = `user:${userId}:selected_model`;
     
     await setCache(userModelCache, modelId, 86400 * 30); 
-    await message.reply(`✅ Model selected: **${modelId}**\nYou can now start chatting with \`!rag chat <message>\` or just \`!rag <message>\`\n\n*Tip: Use \`!rag clear\` if conversations get too long for the context window.*`);
+    await message.reply(`Model selected: **${modelId}**\nYou can now start chatting with \`!rag chat <message>\` or just \`!rag <message>\`\n\n*Tip: Use \`!rag clear\` if conversations get too long for the context window.*`);
 }
 
 async function handleProviderSelect(message, args, userId) {
@@ -136,8 +134,8 @@ async function handleProviderSelect(message, args, userId) {
     }
     await setCache(`user:${userId}:selected_provider`, provider, 86400 * 30);
 
-    // Set a sensible default model per provider if user hasn't chosen one yet
     const currentModel = await getCache(`user:${userId}:selected_model`);
+    console.log('Current selected model:', currentModel);
     if (!currentModel) {
         const defaults = {
             openrouter: 'deepseek/deepseek-r1-0528-qwen3-8b:free',
@@ -148,7 +146,7 @@ async function handleProviderSelect(message, args, userId) {
         };
         await setCache(`user:${userId}:selected_model`, defaults[provider], 86400 * 30);
     }
-    await message.reply(`✅ Provider selected: ${provider}`);
+    await message.reply(`Provider selected: ${provider}`);
 }
 
 async function handlePlan(message, args, userId) {
@@ -159,7 +157,7 @@ async function handlePlan(message, args, userId) {
     const guildId = message.guild?.id;
     if (!guildId) return message.reply('This command must be used in a server.');
     await setCache(`guild:${guildId}:plan`, plan, 86400 * 30);
-    await message.reply(`✅ Plan set for this server: ${plan}`);
+    await message.reply(`Plan set for this server: ${plan}`);
 }
 
 async function handleChat(message, args, userId) {
@@ -170,7 +168,6 @@ async function handleChat(message, args, userId) {
     const guildId = message.guild?.id || 'dm';
     const provider = (await getCache(`user:${userId}:selected_provider`)) || process.env.DEFAULT_PROVIDER || 'openrouter';
     const selectedModel = (await getCache(`user:${userId}:selected_model`)) || process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528-qwen3-8b:free';
-    // Resolve API key precedence: user > guild > env default
     const apiKey = (await getCache(`user:${userId}:${provider}_key`))
         || (guildId !== 'dm' ? await getCache(`guild:${guildId}:${provider}_key`) : null)
         || (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : provider === 'groq' ? process.env.GROQ_API_KEY : provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : provider === 'google' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
@@ -190,31 +187,36 @@ async function handleChat(message, args, userId) {
         console.log('Found similar conversations:', similarConversations);
         
     const recentHistory = await getConversationHistory(userId, guildId, channelId);
-        let contextMessages = [];
-        
-        contextMessages.push(...recentHistory);
         console.log('Recent history messages:', recentHistory.length);
-        
-        if (similarConversations.length > 0) {
-            const contextSummary = similarConversations
-                .filter(conv => conv.score > 0.7)
-                .map(conv => `Previous context: User asked "${conv.userMessage}" and got "${conv.aiResponse.substring(0, 200)}..."`)
-                .join('\n');
-            
-            if (contextSummary) {
-                contextMessages.unshift({
-                    role: 'system',
-                    content: `Relevant conversation history:\n${contextSummary}`
-                });
+
+        const contextParts = [];
+        const similarHigh = (similarConversations || []).filter(c => c.score && c.score > 0.7).slice(0, 3);
+        if (similarHigh.length) {
+            contextParts.push('Similar past Q&A (highest matches):');
+            for (const c of similarHigh) {
+                contextParts.push(`- Q: ${c.userMessage}`);
+                contextParts.push(`  A: ${c.aiResponse.substring(0, 200)}${c.aiResponse.length > 200 ? '…' : ''}`);
+            }
+            contextParts.push('');
+        }
+        if (recentHistory.length) {
+            contextParts.push('Recent chat history (last few turns):');
+            const lastTurns = recentHistory.slice(-10); // already sanitized
+            for (const h of lastTurns) {
+                const tag = h.role === 'user' ? 'User' : 'Assistant';
+                contextParts.push(`- ${tag}: ${h.content}`);
             }
         }
+        const contextBlock = contextParts.length
+            ? `BEGIN CONTEXT\n${contextParts.join('\n')}\nEND CONTEXT\n\nAnswer the following user message using the context if helpful.`
+            : 'No prior context available. Answer the following user message.';
         
         const messages = [
             {
                 role: 'system',
-                content: 'You are a helpful AI assistant. Answer the user\'s questions directly and accurately. Use any relevant conversation history provided to give contextual responses. Be concise but informative. Do not include hidden reasoning, chain-of-thought, or <think> content; provide only the final answer.'
+                content: 'You are a helpful AI assistant. Answer the user\'s questions directly and accurately. Use relevant conversation history to give contextual responses. Be concise but informative. Do not include hidden reasoning, chain-of-thought, or <think> content; provide only the final answer. Do not comment about being an AI, a language model, or your training unless the user explicitly asks.'
             },
-            ...contextMessages,
+            { role: 'system', content: contextBlock },
             {
                 role: 'user',
                 content: userMessage
@@ -225,7 +227,7 @@ async function handleChat(message, args, userId) {
         console.log(`Using ${trimmedMessages.length} messages for context`);
         console.log('Final messages to API:', JSON.stringify(trimmedMessages, null, 2));
         
-        const { text: aiResponse } = await chatWithProvider({
+        let { text: aiResponse } = await chatWithProvider({
             provider,
             apiKey,
             model: selectedModel,
@@ -234,6 +236,7 @@ async function handleChat(message, args, userId) {
             maxTokens: 1000,
             headers: { 'HTTP-Referer': 'https://discord.com', 'X-Title': 'Discord Bot' },
         });
+        aiResponse = sanitizeAIResponse(aiResponse);
         console.log('API Response:', aiResponse);
         
     await storeConversation(userId, guildId, channelId, userMessage, aiResponse, selectedModel);
@@ -268,7 +271,7 @@ async function handleClearHistory(message, userId) {
     await setCache(historyKey, JSON.stringify([]), 86400 * 7);
     await vectorDB.clearUserHistory(userId, guildId, channelId);
         
-        await message.reply('✅ Conversation history cleared for this channel.');
+        await message.reply('Conversation history cleared for this channel.');
     } catch (error) {
         console.error('Error clearing history:', error);
         await message.reply('Failed to clear history.');
@@ -335,7 +338,9 @@ async function getConversationHistory(userId, guildId, channelId) {
     }
     
     try {
-        const history = JSON.parse(cachedHistory);
+        const raw = JSON.parse(cachedHistory);
+        const history = sanitizeHistory(raw);
+        // Keep last 10 messages (5 turns), already sanitized
         return history.slice(-10);
     } catch (error) {
         console.error('Error parsing history:', error);
@@ -359,11 +364,11 @@ async function storeConversation(userId, guildId, channelId, userMessage, aiResp
 
 
 function trimContextMessages(messages, maxChars) {
-    const trimmed = [];
+    const body = [];
     let totalChars = 0;
     
     if (messages[0]?.role === 'system') {
-        trimmed.push(messages[0]);
+        // hold system separately to prepend later
         totalChars += messages[0].content.length;
     }
     
@@ -373,20 +378,45 @@ function trimContextMessages(messages, maxChars) {
     }
     
     for (let i = messages.length - 2; i >= 1; i--) {
+        if (!messages[i] || !messages[i].content) continue;
         const messageChars = messages[i].content.length;
         if (totalChars + messageChars <= maxChars) {
-            trimmed.push(messages[i]);
+            body.push(messages[i]);
             totalChars += messageChars;
         } else {
             break;
         }
     }
     
-    if (lastMessage?.role === 'user') {
-        trimmed.push(lastMessage);
+    const ordered = [];
+    if (messages[0]?.role === 'system') ordered.push(messages[0]);
+    // body was collected newest->older; reverse to older->newer
+    for (let i = body.length - 1; i >= 0; i--) ordered.push(body[i]);
+    if (lastMessage?.role === 'user') ordered.push(lastMessage);
+    return ordered;
+}
+
+function sanitizeHistory(history) {
+    // Remove malformed entries and generic AI disclaimers that bias answers
+    const isGenericAI = (text) => /\b(I am (an|a) large language model|as an ai (language )?model)\b/i.test(text);
+    const sanitized = [];
+    for (const item of Array.isArray(history) ? history : []) {
+        if (!item || typeof item !== 'object') continue;
+        const { role, content } = item;
+        if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') continue;
+        const trimmed = content.trim();
+        if (!trimmed) continue;
+        if (role === 'assistant' && isGenericAI(trimmed)) continue;
+        sanitized.push({ role, content: trimmed });
     }
-    
-    return trimmed;
+    // Optionally deduplicate consecutive identical messages
+    const deduped = [];
+    for (const msg of sanitized) {
+        const prev = deduped[deduped.length - 1];
+        if (prev && prev.role === msg.role && prev.content === msg.content) continue;
+        deduped.push(msg);
+    }
+    return deduped;
 }
 
 async function sendResponseWithTyping(channel, response) {
@@ -428,4 +458,13 @@ function splitMessage(message, maxLength = 2000) {
         message = message.slice(chunk.length).trim();
     }
     return chunks.filter(chunk => chunk.length > 0);
+}
+
+function sanitizeAIResponse(text) {
+    if (!text) return '';
+    // Remove <think>...</think> style tags if any provider leaks them
+    let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    // Trim generic leading disclaimers
+    cleaned = cleaned.replace(/^\s*(As an AI(?: language)? model[,\s])/i, '');
+    return cleaned.trim();
 }
