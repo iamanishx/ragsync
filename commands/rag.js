@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { PermissionFlagsBits } = require("discord.js");
 const validator = require("validator");
 const { getCache, setCache } = require("../redis/redisUtils");
 const vectorDB = require("../utils/vectorDB");
@@ -20,6 +21,9 @@ module.exports = {
       switch (subcommand) {
         case "setup":
           await handleSetup(message, args.slice(1), userId);
+          break;
+        case "switch":
+          await handleSwitch(message, args.slice(1), userId);
           break;
         case "models":
           await handleModels(message, args.slice(1), userId);
@@ -47,7 +51,7 @@ module.exports = {
             await handleChat(message, args, userId);
           } else {
             await message.reply(
-              `Unknown command. Use: \`!rag setup <provider> <API_KEY>\`, \`!rag provider <openrouter|groq|anthropic|google|openai|gemini>\`, \`!rag models\`, \`!rag select <model_name>\`, \`!rag chat <message>\`, \`!rag search <query>\`, \`!rag plan <basic|pro>\`, or \`!rag clear\`\n(Note: Embeddings are managed centrally and do not require your key.)`
+              `Unknown command. Use: \`!skii setup personal\` (setup your own config), \`!skii setup server\` (admin only, setup server-wide config), \`!skii switch server-api\` (use server config), \`!skii switch personal\` (use your config), \`!skii chat <message>\`, \`!skii search <query>\`, \`!skii plan <basic|pro>\`, or \`!skii clear\`\n(Note: Setup now includes provider, API key, and model selection via secure DM links.)`
             );
           }
           break;
@@ -86,68 +90,123 @@ function sanitizeUserInput(text) {
 
 async function handleSetup(message, args, userId) {
   const inGuild = !!message.guild;
-  const providerArg = args[0]?.toLowerCase();
-  const provider = providerArg === "gemini" ? "google" : providerArg;
-  const apiKey = args[1];
+  const setupType = args[0]?.toLowerCase();
 
-  if (inGuild) {
-    if (apiKey) {
-      try {
-        await message.delete();
-      } catch {}
-    }
-    const selProvider =
-      provider ||
-      (await getCache(`user:${userId}:selected_provider`)) ||
-      "openrouter";
-    try {
-      const link = createSetupLink({
-        userId,
-        guildId: message.guild.id,
-        provider: selProvider,
-        scope: "user",
-      });
-      try {
-        await message.author.send(
-          `Set your ${selProvider} API key securely:\n${link}\n(Link expires in 10 minutes)`
-        );
-      } catch {}
-      return message.channel.send(
-        "I sent you a DM with a secure link to set your API key."
-      );
-    } catch (e) {
-      return message.channel.send(
-        "Setup portal is not configured. Admin must set PORTAL_ENABLED=true, PORTAL_BASE_URL or PORTAL_PORT, and PORTAL_SIGNING_SECRET."
-      );
-    }
+  // Validate setup type
+  if (!setupType || !["personal", "server", "guild"].includes(setupType)) {
+    return message.reply(
+      "Please specify setup type: `!skii setup personal` or `!skii setup server` (admin only)"
+    );
   }
 
-  if (!provider || !apiKey) {
-    const selProvider =
-      provider ||
-      (await getCache(`user:${userId}:selected_provider`)) ||
-      "openrouter";
+  const isServerSetup = setupType === "server" || setupType === "guild";
+
+  if (inGuild) {
+    const guildId = message.guild.id;
+
+    if (isServerSetup) {
+      // Permission check for server setup
+      const canManage =
+        message.member?.permissions?.has(PermissionFlagsBits.Administrator) ||
+        message.member?.permissions?.has(PermissionFlagsBits.ManageGuild);
+      if (!canManage) {
+        return message.reply(
+          "Only server admins can set server-wide configuration (requires Manage Server)."
+        );
+      }
+
+      // Send server-wide setup DM link
+      try {
+        const link = createSetupLink({
+          userId,
+          guildId,
+          provider: "openrouter", // Default, user can change in portal
+          scope: "guild",
+        });
+        try {
+          await message.author.send(
+            `🔧 **SERVER-WIDE Setup Link**\n\nConfigure AI provider, API key, and model for everyone in this server:\n${link}\n\n⏰ Link expires in 10 minutes`
+          );
+        } catch {}
+        return message.channel.send(
+          "I sent you a DM with a secure link to configure the server-wide AI settings."
+        );
+      } catch (e) {
+        return message.channel.send(
+          "Setup portal is not configured. Admin must set PORTAL_ENABLED=true, PORTAL_BASE_URL or PORTAL_PORT, and PORTAL_SIGNING_SECRET."
+        );
+      }
+    } else {
+      // Personal setup in guild
+      try {
+        const link = createSetupLink({
+          userId,
+          guildId,
+          provider: "openrouter", // Default, user can change in portal
+          scope: "user",
+        });
+        try {
+          await message.author.send(
+            `🔧 **Personal Setup Link**\n\nConfigure your personal AI provider, API key, and model:\n${link}\n\n⏰ Link expires in 10 minutes`
+          );
+        } catch {}
+        return message.channel.send(
+          "I sent you a DM with a secure link to configure your personal AI settings."
+        );
+      } catch (e) {
+        return message.channel.send(
+          "Setup portal is not configured. Admin must set PORTAL_ENABLED=true, PORTAL_BASE_URL or PORTAL_PORT, and PORTAL_SIGNING_SECRET."
+        );
+      }
+    }
+  } else {
+    // DM context
+    if (isServerSetup) {
+      return message.reply(
+        "To set server-wide configuration, run this command in the server: `!skii setup server` (admin only)."
+      );
+    }
+
+    // Personal setup in DM
     try {
       const link = createSetupLink({
         userId,
         guildId: "dm",
-        provider: selProvider,
+        provider: "openrouter", // Default, user can change in portal
         scope: "user",
       });
       return message.reply(
-        `Use this secure link to set your ${selProvider} API key:\n${link}\n(Link expires in 10 minutes)`
+        `🔧 **Personal Setup Link**\n\nConfigure your AI provider, API key, and model:\n${link}\n\n⏰ Link expires in 10 minutes`
       );
     } catch (e) {
       return message.reply(
-        "Please provide provider and API key in DM: `!rag setup <provider> <API_KEY>` (providers: openrouter|groq|anthropic|google|gemini|openai)"
+        "Setup portal is not configured. Please contact the bot administrator."
       );
     }
   }
+}
 
-  const userKeyCache = `user:${userId}:${provider}_key`;
-  const safe = encryptIfPossible(apiKey);
-  await setCache(userKeyCache, safe, 86400 * 30);
-  await message.reply(`API key stored for provider: ${provider}.`);
+async function handleSwitch(message, args, userId) {
+  const switchType = args[0]?.toLowerCase();
+  
+  if (!switchType || !["server-api", "personal"].includes(switchType)) {
+    return message.reply(
+      "Please specify: `!skii switch personal` (use your config) or `!skii switch server-api` (use server config)"
+    );
+  }
+
+  const guildId = message.guild?.id;
+  if (!guildId) {
+    return message.reply("This command must be used in a server.");
+  }
+
+  const preferenceKey = `user:${userId}:api_preference`;
+  const preference = switchType === "server-api" ? "server" : "personal";
+  
+  await setCache(preferenceKey, preference, 86400 * 30);
+  
+  const configType = preference === "server" ? "server-wide" : "personal";
+  await message.reply(`  Switched to ${configType} API configuration. Your chats will now use the ${configType} settings.`);
 }
 
 async function handleModels(message, args, userId) {
@@ -155,13 +214,11 @@ async function handleModels(message, args, userId) {
   const provider =
     (await getCache(`user:${userId}:selected_provider`)) || "openrouter";
   const apiKeyRaw = await getCache(`user:${userId}:${provider}_key`);
-  const apiKey = apiKeyRaw
-    ? decryptIfPossible(apiKeyRaw)
-    : process.env.OPENROUTER_API_KEY;
+  const apiKey = apiKeyRaw ? decryptIfPossible(apiKeyRaw) : null;
 
   if (!apiKey) {
     return message.reply(
-      "Please setup your API key first: `!rag setup YOUR_API_KEY`"
+      "Please setup your API key first: `!skii setup personal`"
     );
   }
 
@@ -320,21 +377,13 @@ async function handleChat(message, args, userId) {
     }
   } catch (e) {
     console.error("Rate limit check failed:", e.message);
-    // Continue if limiter is unavailable
   }
-  const provider =
-    (await getCache(`user:${userId}:selected_provider`)) ||
-    process.env.DEFAULT_PROVIDER ||
-    "openrouter";
-  const selectedModel =
-    (await getCache(`user:${userId}:selected_model`)) ||
-    process.env.DEFAULT_MODEL ||
-    "deepseek/deepseek-r1-0528-qwen3-8b:free";
+  const { provider, selectedModel } = await getProviderAndModel(userId, guildId);
   const apiKey = await getProviderApiKey(userId, guildId, provider);
 
   if (!apiKey) {
     return message.reply(
-      "No API key found. Use `!rag setup <provider>` and I will DM you a secure link, or set env defaults."
+      "No API key configured. Use `!skii setup personal` to set up your personal AI configuration, or ask an admin to run `!skii setup server` for server-wide setup."
     );
   }
 
@@ -478,26 +527,26 @@ async function handleChat(message, args, userId) {
 }
 
 async function getProviderApiKey(userId, guildId, provider) {
-  const userVal = await getCache(`user:${userId}:${provider}_key`);
-  if (userVal) return decryptIfPossible(userVal);
-  if (guildId && guildId !== "dm") {
+  const userPreference = await getCache(`user:${userId}:api_preference`);
+  
+  if (userPreference === "server" && guildId && guildId !== "dm") {
     const guildVal = await getCache(`guild:${guildId}:${provider}_key`);
     if (guildVal) return decryptIfPossible(guildVal);
+    
+    const userVal = await getCache(`user:${userId}:${provider}_key`);
+    if (userVal) return decryptIfPossible(userVal);
+  } else {
+    const userVal = await getCache(`user:${userId}:${provider}_key`);
+    if (userVal) return decryptIfPossible(userVal);
+    
+    if (guildId && guildId !== "dm") {
+      const guildVal = await getCache(`guild:${guildId}:${provider}_key`);
+      if (guildVal) return decryptIfPossible(guildVal);
+    }
   }
-  switch (provider) {
-    case "openrouter":
-      return process.env.OPENROUTER_API_KEY || null;
-    case "groq":
-      return process.env.GROQ_API_KEY || null;
-    case "anthropic":
-      return process.env.ANTHROPIC_API_KEY || null;
-    case "google":
-      return process.env.GEMINI_API_KEY || null;
-    case "openai":
-      return process.env.OPENAI_API_KEY || null;
-    default:
-      return null;
-  }
+  
+  // No environment variable fallback for SaaS - users must provide their own keys
+  return null;
 }
 
 async function handleClearHistory(message, userId) {
@@ -528,13 +577,12 @@ async function handleSearchHistory(message, args, userId) {
   const guildId = message.guild?.id || "dm";
   const provider =
     (await getCache(`user:${userId}:selected_provider`)) || "openrouter";
-  const apiKey =
-    (await getCache(`user:${userId}:${provider}_key`)) ||
-    process.env.OPENROUTER_API_KEY;
+  const apiKeyRaw = await getCache(`user:${userId}:${provider}_key`);
+  const apiKey = apiKeyRaw ? decryptIfPossible(apiKeyRaw) : null;
 
   if (!apiKey) {
     return message.reply(
-      "Please setup your API key first: `!rag setup YOUR_API_KEY`"
+      "Please setup your API key first: `!skii setup personal`"
     );
   }
 
@@ -681,6 +729,40 @@ function sanitizeHistory(history) {
     deduped.push(msg);
   }
   return deduped;
+}
+
+async function getProviderAndModel(userId, guildId) {
+  const userPreference = await getCache(`user:${userId}:api_preference`);
+  
+  let provider, selectedModel;
+  
+  if (userPreference === "server" && guildId && guildId !== "dm") {
+    provider = await getCache(`guild:${guildId}:selected_provider`);
+    selectedModel = await getCache(`guild:${guildId}:selected_model`);
+    
+    if (!provider) {
+      provider = await getCache(`user:${userId}:selected_provider`);
+    }
+    if (!selectedModel) {
+      selectedModel = await getCache(`user:${userId}:selected_model`);
+    }
+  } else {
+    provider = await getCache(`user:${userId}:selected_provider`);
+    selectedModel = await getCache(`user:${userId}:selected_model`);
+    
+    if (!provider && guildId && guildId !== "dm") {
+      provider = await getCache(`guild:${guildId}:selected_provider`);
+    }
+    if (!selectedModel && guildId && guildId !== "dm") {
+      selectedModel = await getCache(`guild:${guildId}:selected_model`);
+    }
+  }
+  
+  // Final fallbacks to defaults (no environment variables for SaaS)
+  provider = provider || "openrouter";
+  selectedModel = selectedModel || "deepseek/deepseek-r1-0528-qwen3-8b:free";
+  
+  return { provider, selectedModel };
 }
 
 async function sendResponseWithTyping(channel, response) {
