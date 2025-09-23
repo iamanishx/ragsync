@@ -148,7 +148,6 @@ function startPortal() {
       if (typeof apiKey !== "string" || apiKey.length < 8)
         throw new Error("Invalid API key");
       
-      // Handle model selection - either from dropdown or custom input
       let selectedModel = model;
       if (model === 'custom') {
         if (!customModel || typeof customModel !== "string" || customModel.trim().length < 3) {
@@ -165,12 +164,10 @@ function startPortal() {
           ? `guild:${payload.guildId}`
           : `user:${payload.userId}`;
 
-      // Save API key
       const keyName = `${prefix}:${prov}_key`;
       const encryptedKey = encryptIfPossible(apiKey);
       await setCache(keyName, encryptedKey, 86400 * 30);
 
-      // Save provider and model preferences
       await setCache(`${prefix}:selected_provider`, prov, 86400 * 30);
       await setCache(`${prefix}:selected_model`, selectedModel, 86400 * 30);
 

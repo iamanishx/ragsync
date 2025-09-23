@@ -115,12 +115,11 @@ async function handleSetup(message, args, userId) {
         );
       }
 
-      // Send server-wide setup DM link
       try {
         const link = createSetupLink({
           userId,
           guildId,
-          provider: "openrouter", // Default, user can change in portal
+          provider: "openrouter",
           scope: "guild",
         });
         try {
@@ -137,12 +136,11 @@ async function handleSetup(message, args, userId) {
         );
       }
     } else {
-      // Personal setup in guild
       try {
         const link = createSetupLink({
           userId,
           guildId,
-          provider: "openrouter", // Default, user can change in portal
+          provider: "openrouter",
           scope: "user",
         });
         try {
@@ -160,19 +158,17 @@ async function handleSetup(message, args, userId) {
       }
     }
   } else {
-    // DM context
     if (isServerSetup) {
       return message.reply(
         "To set server-wide configuration, run this command in the server: `!skii setup server` (admin only)."
       );
     }
 
-    // Personal setup in DM
     try {
       const link = createSetupLink({
         userId,
         guildId: "dm",
-        provider: "openrouter", // Default, user can change in portal
+        provider: "openrouter",
         scope: "user",
       });
       return message.reply(
@@ -349,7 +345,6 @@ async function handleChat(message, args, userId) {
   }
 
   const guildId = message.guild?.id || "dm";
-  // Rate limiting: per-user and per-guild
   const userLimit = parseInt(
     process.env.RATE_LIMIT_PER_USER_PER_MIN || "10",
     10
@@ -544,9 +539,7 @@ async function getProviderApiKey(userId, guildId, provider) {
       if (guildVal) return decryptIfPossible(guildVal);
     }
   }
-  
-  // No environment variable fallback for SaaS - users must provide their own keys
-  return null;
+    return null;
 }
 
 async function handleClearHistory(message, userId) {
@@ -757,9 +750,7 @@ async function getProviderAndModel(userId, guildId) {
       selectedModel = await getCache(`guild:${guildId}:selected_model`);
     }
   }
-  
-  // Final fallbacks to defaults (no environment variables for SaaS)
-  provider = provider || "openrouter";
+    provider = provider || "openrouter";
   selectedModel = selectedModel || "deepseek/deepseek-r1-0528-qwen3-8b:free";
   
   return { provider, selectedModel };
