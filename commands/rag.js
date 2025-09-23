@@ -266,11 +266,11 @@ async function handleModels(message, args, userId) {
       modelList += `... and ${filteredModels.length - 15} more models\n\n`;
     }
 
-    modelList += `\nUse \`!rag select <model_id>\` to choose a model\n`;
-    modelList += `Use \`!rag models ${showPaid ? "" : "paid"}\` to see ${
+    modelList += `\nUse \`!skii select <model_id>\` to choose a model\n`;
+    modelList += `Use \`!skii models ${showPaid ? "" : "paid"}\` to see ${
       showPaid ? "free" : "paid"
     } models\n`;
-    modelList += `\nTip: Use \`!rag setup <provider>\` (no key in channel) to receive a secure DM link.\n`;
+    modelList += `\nTip: Use \`!skii setup <provider>\` (no key in channel) to receive a secure DM link.\n`;
 
     await message.channel.send(modelList);
   } catch (error) {
@@ -284,7 +284,7 @@ async function handleModels(message, args, userId) {
 
 async function handleModelSelect(message, args, userId) {
   if (!args[0]) {
-    return message.reply("Please specify a model: `!rag select <model_id>`");
+    return message.reply("Please specify a model: `!skii select <model_id>`");
   }
 
   const modelId = args.join("/");
@@ -292,7 +292,7 @@ async function handleModelSelect(message, args, userId) {
 
   await setCache(userModelCache, modelId, 86400 * 30);
   await message.reply(
-    `Model selected: **${modelId}**\nYou can now start chatting with \`!rag chat <message>\` or just \`!rag <message>\`\n\n*Tip: Use \`!rag clear\` if conversations get too long for the context window.*`
+    `Model selected: **${modelId}**\nYou can now start chatting with \`!skii chat <message>\` or just \`!skii <message>\`\n\n*Tip: Use \`!skii clear\` if conversations get too long for the context window.*`
   );
 }
 
@@ -304,7 +304,7 @@ async function handleProviderSelect(message, args, userId) {
     !["openrouter", "groq", "anthropic", "google", "openai"].includes(provider)
   ) {
     return message.reply(
-      "Please specify a provider: `!rag provider <openrouter|groq|anthropic|google|gemini|openai>`"
+      "Please specify a provider: `!skii provider <openrouter|groq|anthropic|google|gemini|openai>`"
     );
   }
   await setCache(`user:${userId}:selected_provider`, provider, 86400 * 30);
@@ -331,7 +331,7 @@ async function handleProviderSelect(message, args, userId) {
 async function handlePlan(message, args, userId) {
   const plan = args[0]?.toLowerCase();
   if (!plan || !["basic", "pro"].includes(plan)) {
-    return message.reply("Please specify a plan: `!rag plan <basic|pro>`");
+    return message.reply("Please specify a plan: `!skii plan <basic|pro>`");
   }
   const guildId = message.guild?.id;
   if (!guildId) return message.reply("This command must be used in a server.");
@@ -494,7 +494,7 @@ async function handleChat(message, args, userId) {
 
     if (error.response?.status === 401) {
       await message.reply(
-        "Invalid API key for the selected provider. Re-run `!rag setup <provider> <API_KEY>`."
+        "Invalid API key for the selected provider. Re-run `!skii setup <provider> <API_KEY>`."
       );
     } else if (error.response?.status === 400) {
       console.error("Bad request details:", error.response?.data);
@@ -504,14 +504,14 @@ async function handleChat(message, args, userId) {
     } else if (error.response?.status === 500) {
       console.error("Server error details:", error.response?.data);
       await message.reply(
-        "Provider server error. The messages may be too long or malformed. Try `!rag clear` to reset history."
+        "Provider server error. The messages may be too long or malformed. Try `!skii clear` to reset history."
       );
     } else if (
       error.response?.status === 413 ||
       error.message.includes("context")
     ) {
       await message.reply(
-        "Message too long for model context. Try a shorter message or use `!rag clear` to reset conversation history."
+        "Message too long for model context. Try a shorter message or use `!skii clear` to reset conversation history."
       );
     } else {
       await message.reply(
@@ -561,7 +561,7 @@ async function handleClearHistory(message, userId) {
 async function handleSearchHistory(message, args, userId) {
   if (!args.length) {
     return message.reply(
-      "Please provide a search query: `!rag search <query>`"
+      "Please provide a search query: `!skii search <query>`"
     );
   }
 
