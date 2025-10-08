@@ -1,35 +1,20 @@
 # Use an official Node.js runtime as the base image
 FROM node:18-alpine
 
-# Install curl for healthchecks
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl yarn
 
-# Create app directory and user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy package files with correct ownership
-COPY --chown=nodejs:nodejs package*.json ./
+COPY --chown=nodejs:nodejs package*.json yarn.lock ./
 
-# Install project dependencies
-RUN npm ci --only=production && npm cache clean --force
-
-# Copy the rest of the application code
+RUN yarn install --production --frozen-lockfile && yarn cache clean
 COPY --chown=nodejs:nodejs . .
-
-# Create logs directory
 RUN mkdir -p logs && chown nodejs:nodejs logs
-
-# Switch to non-root user
 USER nodejs
-
-# Expose the portal port
 EXPOSE 8787
-
-# Set environment variables
 ENV NODE_ENV=production
 
 # Health check
