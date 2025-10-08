@@ -34,7 +34,9 @@ function verifySetupToken(token) {
 }
 
 function createSetupLink(params) {
-  const base = process.env.PORTAL_BASE_URL || `http://localhost:${process.env.PORTAL_PORT || 8787}`;
+  const base = process.env.RAILWAY_STATIC_URL ||
+               process.env.PORTAL_BASE_URL ||
+               `http://localhost:${process.env.PORTAL_PORT || 8787}`;
   const token = createSetupToken(params);
   return `${base}/setup?token=${encodeURIComponent(token)}`;
 }

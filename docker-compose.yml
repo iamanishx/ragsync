@@ -13,7 +13,11 @@ services:
     networks:
       - bot-network
     volumes:
-      - ./logs:/app/logs  # Optional: for log persistence
+      - ./logs:/app/logs
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - RAILWAY_ENVIRONMENT=${RAILWAY_ENVIRONMENT:-development}
 
   redis:
     image: redis:7-alpine
