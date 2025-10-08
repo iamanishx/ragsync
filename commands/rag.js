@@ -92,7 +92,6 @@ async function handleSetup(message, args, userId) {
   const inGuild = !!message.guild;
   const setupType = args[0]?.toLowerCase();
 
-  // Validate setup type
   if (!setupType || !["personal", "server", "guild"].includes(setupType)) {
     return message.reply(
       "Please specify setup type: `!skii setup personal` or `!skii setup server` (admin only)"
