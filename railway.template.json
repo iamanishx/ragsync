@@ -1,0 +1,78 @@
+{
+  "name": "Discord RAG Bot Nexus",
+  "description": "Multi-provider Discord bot with RAG capabilities - users bring their own API keys",
+  "tags": ["discord", "ai", "rag", "chatbot", "nodejs"],
+  "repository": "https://github.com/iamanishx/discord-bot",
+  "services": [
+    {
+      "name": "discord-bot",
+      "type": "web",
+      "plan": "hobby",
+      "env": {
+        "DISCORD_TOKEN": {
+          "description": "Discord bot token from Discord Developer Portal",
+          "required": true
+        },
+        "PORTAL_PORT": {
+          "description": "Port for the setup portal",
+          "default": "8787"
+        },
+        "SECRETS_KEY": {
+          "description": "32-character key for API key encryption",
+          "generator": "secret"
+        },
+        "EMBEDDINGS_PROVIDER": {
+          "description": "Embeddings provider (huggingface, google, openai)",
+          "default": "huggingface"
+        },
+        "EMBEDDINGS_MODEL": {
+          "description": "Model for embeddings",
+          "default": "BAAI/bge-base-en-v1.5"
+        },
+        "EMBEDDINGS_DIM": {
+          "description": "Embedding dimensions",
+          "default": "768"
+        },
+        "HF_TOKEN": {
+          "description": "Hugging Face token for embeddings (optional)",
+          "required": false
+        },
+        "NODE_ENV": {
+          "description": "Node environment",
+          "default": "production"
+        }
+      },
+      "build": {
+        "dockerfile": "Dockerfile"
+      },
+      "deploy": {
+        "restartPolicyType": "ON_FAILURE"
+      }
+    },
+    {
+      "name": "redis",
+      "type": "redis",
+      "plan": "hobby"
+    },
+    {
+      "name": "qdrant",
+      "type": "web",
+      "plan": "hobby",
+      "image": "qdrant/qdrant:latest",
+      "env": {
+        "QDRANT__SERVICE__HTTP_PORT": "6333",
+        "QDRANT__SERVICE__GRPC_PORT": "6334"
+      },
+      "volumes": [
+        {
+          "mountPath": "/qdrant/storage",
+          "size": "1GB"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "REDIS_URL": "${{redis.REDIS_URL}}",
+    "QDRANT_URL": "http://${{qdrant.RAILWAY_PRIVATE_DOMAIN}}:6333"
+  }
+}
